@@ -501,10 +501,16 @@ async function loadSharedState(){
   try{
     const res = await storageGet('pos-shared-state', true);
     if(res && res.value){ state = JSON.parse(res.value); migrateState(); stateVersion="loaded"; showStorageWarningIfNeeded(); return; }
-  }catch(e){}
+    if(STORAGE_MODE==='sheets') console.warn('Sheets mode: no existing state found on the sheet — starting fresh (or the sheet is genuinely empty).');
+  }catch(e){
+    if(STORAGE_MODE==='sheets') console.error('Sheets mode: reading state failed, starting fresh locally', e);
+  }
   state = defaultState();
   await saveState();
   showStorageWarningIfNeeded();
+  if(STORAGE_MODE==='sheets'){
+    setTimeout(()=>toast('⚠️ ไม่พบข้อมูลบน Google Sheet หรืออ่านไม่สำเร็จ — เริ่มด้วยข้อมูลเปล่าใหม่ ถ้าไม่ใช่การใช้งานครั้งแรก ไปตรวจสอบที่ตั้งค่า → Google Sheet → ทดสอบการเชื่อมต่อ'), 800);
+  }
 }
 let _lastSaveFailedToast = 0;
 async function saveState(){
@@ -665,13 +671,12 @@ function openRegisterModal(googlePrefill){
   const overlay = document.createElement('div'); overlay.className='overlay';
   overlay.innerHTML = `<div class="modal">
     <h3>ลงทะเบียนผู้ใช้ใหม่</h3>
-    ${googlePrefill? `<div class="notice">กำลังลงทะเบียนด้วยบัญชี Google: <b>${googlePrefill.email}</b> — ไม่พบบัญชีที่ผูกกับอีเมลนี้ กรุณาเลือกบทบาทเพื่อสร้างบัญชีใหม่</div>` : `<div id="googleSignInBtnReg" style="display:flex; justify-content:center; margin-bottom:12px;"></div>
+    ${googlePrefill? `<div class="notice">กำลังลงทะเบียนด้วยบัญชี Google: <b>${googlePrefill.email}</b> — ไม่พบบัญชีที่ผูกกับอีเมลนี้ กรอกข้อมูลด้านล่างเพื่อสร้างบัญชีใหม่ (ยังตั้งรหัสผ่านของตัวเองได้ตามปกติ)</div>` : `<div id="googleSignInBtnReg" style="display:flex; justify-content:center; margin-bottom:12px;"></div>
     <div style="display:flex; align-items:center; gap:10px; margin:4px 0 14px;"><div style="flex:1; border-top:1px solid var(--line);"></div><span style="font-size:11.5px; color:var(--ink-soft);">หรือกรอกข้อมูลเอง</span><div style="flex:1; border-top:1px solid var(--line);"></div></div>`}
     <div class="field"><label>ชื่อ-นามสกุล</label><input id="regName" value="${googlePrefill?googlePrefill.name:''}"></div>
-    ${googlePrefill? '' : `
-    <div class="field"><label>ชื่อผู้ใช้</label><input id="regUser" autocomplete="username"></div>
+    <div class="field"><label>ชื่อผู้ใช้</label><input id="regUser" autocomplete="username" value="${googlePrefill?googlePrefill.email:''}"></div>
     <div class="field"><label>รหัสผ่าน</label><input id="regPass" type="password" autocomplete="new-password"></div>
-    <div class="field"><label>ยืนยันรหัสผ่าน</label><input id="regPass2" type="password"></div>`}
+    <div class="field"><label>ยืนยันรหัสผ่าน</label><input id="regPass2" type="password"></div>
     <div class="field"><label>บทบาท</label>
       <select id="regRole">
         <option value="cashier">แคชเชียร์</option>
@@ -704,18 +709,12 @@ function openRegisterModal(googlePrefill){
   overlay.querySelector('#submitReg').onclick = async ()=>{
     const name = overlay.querySelector('#regName').value.trim();
     const role = roleSel.value;
-    let username, pass;
-    if(googlePrefill){
-      username = googlePrefill.email; pass = 'google-' + Math.random().toString(36).slice(2);
-      if(!name){ toast('กรุณากรอกชื่อ-นามสกุล'); return; }
-    } else {
-      username = overlay.querySelector('#regUser').value.trim();
-      pass = overlay.querySelector('#regPass').value;
-      const pass2 = overlay.querySelector('#regPass2').value;
-      if(!name || !username || !pass){ toast('กรุณากรอกข้อมูลให้ครบ'); return; }
-      if(pass.length < 6){ toast('รหัสผ่านควรมีอย่างน้อย 6 ตัวอักษร'); return; }
-      if(pass !== pass2){ toast('รหัสผ่านยืนยันไม่ตรงกัน'); return; }
-    }
+    const username = overlay.querySelector('#regUser').value.trim();
+    const pass = overlay.querySelector('#regPass').value;
+    const pass2 = overlay.querySelector('#regPass2').value;
+    if(!name || !username || !pass){ toast('กรุณากรอกข้อมูลให้ครบ'); return; }
+    if(pass.length < 6){ toast('รหัสผ่านควรมีอย่างน้อย 6 ตัวอักษร'); return; }
+    if(pass !== pass2){ toast('รหัสผ่านยืนยันไม่ตรงกัน'); return; }
     if(state.staffAccounts.find(a=>a.username===username)){ toast('ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น'); return; }
     const newAcc = { id:'u'+Date.now(), username, password:pass, role, name, station: role==='kitchen'? overlay.querySelector('#regStation').value : null, googleEmail: googlePrefill? googlePrefill.email : null };
     state.staffAccounts.push(newAcc);
@@ -2627,6 +2626,7 @@ function adminSheetsPanel(){
         <button class="btn btn-primary btn-small" id="enableSheetsDb" ${!state.meta.sheetsUrl?'disabled':''}>เปิดใช้งานเป็นฐานข้อมูลหลักบนเครื่องนี้</button>
         ${!state.meta.sheetsUrl? `<p class="hint">กรุณาใส่และบันทึก Apps Script URL ด้านบนก่อน</p>`:''}
       `}
+      <button class="btn btn-ghost btn-small" id="testSheetsConn" style="margin-top:6px;" ${!state.meta.sheetsUrl?'disabled':''}>ทดสอบการเชื่อมต่อ</button>
       ${shareLink? `
       <div class="field" style="margin-top:10px;"><label>ลิงก์สำหรับแจกจ่ายให้อุปกรณ์อื่น (เปิดลิงก์นี้ = ใช้ฐานข้อมูลเดียวกันอัตโนมัติ ไม่ต้องตั้งค่าเอง)</label>
         <input id="shareBackendLink" readonly value="${shareLink}" style="font-size:11.5px;">
@@ -2653,13 +2653,15 @@ function adminSheetsPanel(){
     <button class="btn btn-secondary btn-small" id="saveDriveFolder">บันทึกโฟลเดอร์ Drive</button>
     ${state.meta.driveFolderId? `<p class="hint">Folder ID ที่ตรวจพบ: <span class="mono">${state.meta.driveFolderId}</span></p>` : (state.meta.driveFolderUrl? `<p class="hint" style="color:var(--chili-deep);">ไม่พบ Folder ID ใน URL ที่ใส่ — ตรวจสอบว่าคัดลอก URL ของโฟลเดอร์มาแบบเต็ม</p>` : '')}
 
-    <div class="section-title" style="margin-top:16px;">ขั้นตอนติดตั้ง (ทำครั้งเดียว)</div>
+    <div class="section-title" style="margin-top:16px;">ขั้นตอนติดตั้ง</div>
+    <div class="notice" style="background:#fef3c7; border-color:#f5c453; color:#7a5a1e;"><b>สำคัญมากถ้าเคยตั้งค่าไว้แล้ว:</b> ทุกครั้งที่โค้ดด้านล่างมีการอัปเดต (เช่นตอนนี้) ต้อง Deploy ใหม่เสมอ — แค่วางโค้ดแล้วกด "บันทึก" (Ctrl+S) ในหน้า Apps Script <u>ไม่เพียงพอ</u> เพราะ URL เดิมจะยังรันโค้ดเวอร์ชันเก่าอยู่ ต้องเข้า Deploy → Manage deployments → กดไอคอนดินสอ (แก้ไข) → ที่ช่อง Version เลือก "New version" → กด Deploy อีกครั้ง (URL จะเหมือนเดิม ไม่ต้องเปลี่ยนที่วางในแอป) — ถ้าข้ามขั้นนี้ไป ฟีเจอร์ที่เพิ่งเพิ่ม (เช่น ฐานข้อมูลจริง) จะไม่ทำงานเงียบๆ โดยไม่มี error ให้เห็น</div>
     <ol style="font-size:12.5px; color:var(--ink-soft); padding-left:18px;">
       <li>ดาวน์โหลดไฟล์ Script ด้านล่าง</li>
-      <li>สร้าง Google Sheet ใหม่ → เมนู Extensions → Apps Script</li>
-      <li>ลบโค้ดเดิมทั้งหมด แล้ววางเนื้อหาจากไฟล์ที่ดาวน์โหลด (หรือกด "คัดลอกโค้ด" แล้ววาง)</li>
-      <li>Deploy → New deployment → เลือกประเภท Web app → Execute as: Me, Who has access: Anyone (ถ้าจะใช้ฟีเจอร์เก็บรูปใน Drive ต้องกด "อนุญาต" สิทธิ์เข้าถึง Google Drive ตอน Deploy ด้วย)</li>
-      <li>คัดลอก URL ที่ได้มาวางในช่องด้านบนแล้วกด "บันทึก URL"</li>
+      <li>สร้าง Google Sheet ใหม่ (หรือเปิดของเดิม) → เมนู Extensions → Apps Script</li>
+      <li>ลบโค้ดเดิมทั้งหมด แล้ววางเนื้อหาจากไฟล์ที่ดาวน์โหลด (หรือกด "คัดลอกโค้ด" แล้ววาง) → กด Ctrl+S บันทึกไฟล์</li>
+      <li><b>ถ้าไม่เคย Deploy มาก่อน:</b> Deploy → New deployment → เลือกประเภท Web app → Execute as: Me, Who has access: Anyone (ถ้าจะใช้ฟีเจอร์เก็บรูปใน Drive ต้องกด "อนุญาต" สิทธิ์เข้าถึง Google Drive ตอน Deploy ด้วย) → คัดลอก URL</li>
+      <li><b>ถ้าเคย Deploy แล้วแค่อัปเดตโค้ด:</b> Deploy → Manage deployments → ไอคอนดินสอ → Version เลือก "New version" → Deploy (URL เดิมใช้ต่อได้ ไม่ต้องแก้ในแอป)</li>
+      <li>วาง URL ในช่องด้านบนแล้วกด "บันทึก URL" จากนั้นกด "ทดสอบการเชื่อมต่อ" เพื่อยืนยันว่าใช้งานได้จริงก่อนเปิดโหมดฐานข้อมูลหลัก</li>
     </ol>
     <div style="display:flex; gap:8px; flex-wrap:wrap;">
       <button class="btn btn-ghost btn-small" id="downloadScript">⬇ ดาวน์โหลดไฟล์ Script</button>
@@ -2676,10 +2678,34 @@ function bindAdminSheetsEvents(){
     if(changed && session.role==='owner'){ await restoreFromSheets(); }
     renderView();
   };
-  const enableSheetsDbBtn = document.getElementById('enableSheetsDb'); if(enableSheetsDbBtn) enableSheetsDbBtn.onclick = ()=>{
+  const enableSheetsDbBtn = document.getElementById('enableSheetsDb'); if(enableSheetsDbBtn) enableSheetsDbBtn.onclick = async ()=>{
     if(!state.meta.sheetsUrl){ toast('กรุณาบันทึก Apps Script URL ก่อน'); return; }
+    enableSheetsDbBtn.disabled = true; enableSheetsDbBtn.textContent = 'กำลังอัปโหลดข้อมูลปัจจุบัน...';
+    try{
+      const stripped = JSON.stringify(stripHeavyFieldsForSync(state));
+      await fetch(state.meta.sheetsUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'saveAppState', stateJson: stripped }) });
+    }catch(e){ console.error('push before enabling sheets mode failed', e); }
     try{ localStorage.setItem('pospro_backend_url', state.meta.sheetsUrl); }catch(e){}
     window.location.reload();
+  };
+  const testSheetsBtn = document.getElementById('testSheetsConn'); if(testSheetsBtn) testSheetsBtn.onclick = async ()=>{
+    const url = document.getElementById('sheetsUrl').value.trim();
+    if(!url){ toast('กรุณาใส่ URL ก่อนทดสอบ'); return; }
+    testSheetsBtn.disabled = true; testSheetsBtn.textContent = 'กำลังทดสอบ...';
+    let writeOk = false, readOk = false, readError = '';
+    try{
+      await fetch(url, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'saveAppState', stateJson: JSON.stringify({__ping:Date.now()}) }) });
+      writeOk = true;
+    }catch(e){ readError = String(e); }
+    try{
+      const res = await fetch(url + (url.includes('?')?'&':'?') + 'type=state');
+      const data = await res.json();
+      readOk = !!data;
+    }catch(e){ readError = String(e); }
+    testSheetsBtn.disabled = false; testSheetsBtn.textContent = 'ทดสอบการเชื่อมต่อ';
+    if(writeOk && readOk){ toast('✅ เชื่อมต่อสำเร็จ ทั้งเขียนและอ่านข้อมูลได้'); }
+    else if(writeOk && !readOk){ toast('⚠️ ส่งข้อมูลได้ แต่อ่านกลับไม่ได้ — ตรวจว่า Deploy เวอร์ชันล่าสุดแล้วหรือยัง (ต้องกด "New deployment" ไม่ใช่แค่บันทึกโค้ด)'); }
+    else { toast('❌ เชื่อมต่อไม่สำเร็จ ตรวจสอบ URL และการ Deploy — ' + (readError||'')); }
   };
   const disableSheetsDbBtn = document.getElementById('disableSheetsDb'); if(disableSheetsDbBtn) disableSheetsDbBtn.onclick = ()=>{
     try{ localStorage.removeItem('pospro_backend_url'); }catch(e){}
