@@ -355,6 +355,9 @@ function defaultState(){
     rolePermissions:{ manager:[...ROLES.manager.tabs], cashier:[...ROLES.cashier.tabs], kitchen:[...ROLES.kitchen.tabs] },
     stations:[ {id:"noodle", name:"ครัวก๋วยเตี๋ยว"}, {id:"fry", name:"ครัวงานทอด"}, {id:"prep", name:"ครัวเตรียมวัตถุดิบ"} ],
     tableGridCols:0,
+    menuGridColsStaff:0,
+    menuGridColsCustomer:0,
+    themeName:'blue',
     auditLog:[],
     cashDrawer:{ float:2000, isOpen:false, log:[] },
     dailyClosings:[],
@@ -371,6 +374,7 @@ let adminSub = "staff";
 let billDraft = null;
 let activeTab = null;
 let showCategoryOptionsPanel = false;
+let showGridSettingsPanel = false;
 let alertedSkipIds = new Set();
 let autoSyncTimer = null;
 let analyticsRange = "7d";
@@ -386,6 +390,9 @@ function migrateState(){
   if(!state.rolePermissions) state.rolePermissions = d.rolePermissions;
   if(!state.stations) state.stations = d.stations;
   if(state.tableGridCols===undefined) state.tableGridCols = 0;
+  if(state.menuGridColsStaff===undefined) state.menuGridColsStaff = 0;
+  if(state.menuGridColsCustomer===undefined) state.menuGridColsCustomer = 0;
+  if(!state.themeName) state.themeName = 'blue';
   if(!state.bankAccount) state.bankAccount = d.bankAccount;
   if(state.meta && state.meta.driveFolderUrl===undefined){ state.meta.driveFolderUrl=""; state.meta.driveFolderId=""; }
   if(state.meta && !state.meta.autoSync){ state.meta.autoSync = { enabled:false, intervalMinutes:30 }; }
@@ -440,6 +447,7 @@ function stripHeavyFieldsForSync(s){
   if(clone.products) clone.products.forEach(p=>{ p.image=''; });
   if(clone.stock) clone.stock.forEach(x=>{ x.image=''; });
   if(clone.expenses) clone.expenses.forEach(b=>{ b.receiptImage=''; });
+  if(clone.orders) clone.orders.forEach(o=>{ if(o.paymentProofImage) o.paymentProofImage=''; });
   return clone;
 }
 let _memoryStore = {};
@@ -541,7 +549,7 @@ async function refreshFromShared(){
     const res = await storageGet('pos-shared-state', true);
     if(res && res.value){
       const fresh = JSON.parse(res.value);
-      if(fresh.updatedAt !== state.updatedAt){ state = fresh; migrateState(); renderView(); }
+      if(fresh.updatedAt !== state.updatedAt){ state = fresh; migrateState(); applyTheme(state.themeName); renderView(); }
     }
   }catch(e){}
   finally{ _refreshInFlight = false; }
@@ -612,6 +620,29 @@ function promptpayQrImg(amount, size){
 
 function fmtPrice(n){ n = Number(n||0); return n % 1 === 0 ? fmt(n) : n.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function nowTime(){ return new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}); }
+const THEME_PRESETS = {
+  blue:   { name:"น้ำเงิน (ค่าเริ่มต้น)", broth:"#1677FF", brothDeep:"#172033", gold:"#18BFFF", herb:"#12B76A", warn:"#F79009", blue:"#1455D9", cream:"#F7F9FC", creamDeep:"#EEF2FA", ink:"#172033", inkSoft:"#667085", line:"#E5EAF2", paper:"#FFFFFF" },
+  green:  { name:"เขียว", broth:"#16A34A", brothDeep:"#14532D", gold:"#22C55E", herb:"#15803D", warn:"#F59E0B", blue:"#0D9488", cream:"#F6FBF7", creamDeep:"#E9F5EC", ink:"#1B3A2A", inkSoft:"#5B7566", line:"#DCEEE1", paper:"#FFFFFF" },
+  purple: { name:"ม่วง", broth:"#7C3AED", brothDeep:"#3B0764", gold:"#A78BFA", herb:"#16A34A", warn:"#F59E0B", blue:"#6D28D9", cream:"#F9F7FE", creamDeep:"#EFE9FB", ink:"#2E1065", inkSoft:"#6B5C87", line:"#E4DBF7", paper:"#FFFFFF" },
+  orange: { name:"ส้ม/อบอุ่น", broth:"#EA580C", brothDeep:"#7C2D12", gold:"#FB923C", herb:"#16A34A", warn:"#CA8A04", blue:"#C2410C", cream:"#FFF8F3", creamDeep:"#FCEBDD", ink:"#431407", inkSoft:"#8A6250", line:"#F3DCC9", paper:"#FFFFFF" },
+  dark:   { name:"เข้ม (Dark)", broth:"#3B82F6", brothDeep:"#0B1220", gold:"#38BDF8", herb:"#22C55E", warn:"#F59E0B", blue:"#60A5FA", cream:"#0F172A", creamDeep:"#1E293B", ink:"#F1F5F9", inkSoft:"#94A3B8", line:"#334155", paper:"#1A2740" }
+};
+function applyTheme(themeKey){
+  const t = THEME_PRESETS[themeKey] || THEME_PRESETS.blue;
+  const r = document.documentElement.style;
+  r.setProperty('--broth', t.broth);
+  r.setProperty('--broth-deep', t.brothDeep);
+  r.setProperty('--gold', t.gold);
+  r.setProperty('--herb', t.herb);
+  r.setProperty('--warn', t.warn);
+  r.setProperty('--blue', t.blue);
+  r.setProperty('--cream', t.cream);
+  r.setProperty('--cream-deep', t.creamDeep);
+  r.setProperty('--ink', t.ink);
+  r.setProperty('--ink-soft', t.inkSoft);
+  r.setProperty('--line', t.line);
+  r.setProperty('--paper', t.paper);
+}
 function decodeJwt(token){
   try{
     const base64 = token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
@@ -876,6 +907,8 @@ function viewPOS(){
   const grouped = posFilter==="ทั้งหมด";
   const groups = grouped ? cats.slice(1).map(c=>({cat:c, items:prods.filter(p=>p.category===c)})).filter(g=>g.items.length) : [{cat:posFilter, items:prods}];
   const unpaidCount = state.orders.filter(o=>o.status==='kitchen').length;
+  const staffCols = state.menuGridColsStaff || 0;
+  const gridStyle = staffCols>0 ? `style="grid-template-columns:repeat(${staffCols},1fr);"` : '';
   function tileHtml(p){
     return `<button class="prod-tile ${p.status==='หมด'?'out':''}" data-addprod="${p.id}" ${p.status==='หมด'?'disabled':''}>
       <div class="prod-thumb" ${prodThumb(p)}>${p.image?'':'🍜'}</div>
@@ -887,11 +920,32 @@ function viewPOS(){
     <div>
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
         <div class="cat-row" style="margin:0;">${cats.map(c=>`<button class="cat-chip ${c===posFilter?'active':''}" data-cat="${c}">${c}</button>`).join('')}</div>
-        <button class="btn btn-secondary btn-small" id="openUnpaidOrders">🧾 ออเดอร์รอชำระเงิน${unpaidCount? ` (${unpaidCount})`:''}</button>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-ghost btn-small" id="toggleGridSettings">⚙️ จัดคอลัมน์</button>
+          <button class="btn btn-secondary btn-small" id="openUnpaidOrders">🧾 ออเดอร์รอชำระเงิน${unpaidCount? ` (${unpaidCount})`:''}</button>
+        </div>
       </div>
+      ${showGridSettingsPanel? `<div class="panel" style="margin-bottom:12px;">
+        <div style="display:flex; gap:20px; flex-wrap:wrap;">
+          <div>
+            <label style="font-size:12.5px; color:var(--ink-soft); display:block; margin-bottom:4px;">คอลัมน์เมนู (หน้าขายหน้าร้าน)</label>
+            <select id="menuGridStaffSel" class="mini">
+              <option value="0" ${staffCols===0?'selected':''}>อัตโนมัติ</option>
+              ${[2,3,4,5,6].map(n=>`<option value="${n}" ${staffCols===n?'selected':''}>${n} คอลัมน์</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12.5px; color:var(--ink-soft); display:block; margin-bottom:4px;">คอลัมน์เมนู (หน้าลูกค้าสแกน QR)</label>
+            <select id="menuGridCustomerSel" class="mini">
+              <option value="0" ${(state.menuGridColsCustomer||0)===0?'selected':''}>อัตโนมัติ</option>
+              ${[1,2,3,4].map(n=>`<option value="${n}" ${(state.menuGridColsCustomer||0)===n?'selected':''}>${n} คอลัมน์</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      </div>`:''}
       ${groups.map(g=>`
         ${grouped? `<div class="cat-divider">${g.cat}</div>`:''}
-        <div class="prod-grid">${g.items.map(tileHtml).join('')}</div>
+        <div class="prod-grid" ${gridStyle}>${g.items.map(tileHtml).join('')}</div>
       `).join('')}
     </div>
     <div class="cart">
@@ -972,6 +1026,9 @@ function bindPOSEvents(){
   const sendBtn = document.getElementById('sendKitchen'); if(sendBtn) sendBtn.onclick = sendToKitchen;
   const checkoutBtn = document.getElementById('checkout'); if(checkoutBtn) checkoutBtn.onclick = openCheckoutModal;
   const unpaidBtn = document.getElementById('openUnpaidOrders'); if(unpaidBtn) unpaidBtn.onclick = openUnpaidOrdersModal;
+  const toggleGridBtn = document.getElementById('toggleGridSettings'); if(toggleGridBtn) toggleGridBtn.onclick = ()=>{ showGridSettingsPanel = !showGridSettingsPanel; renderView(); };
+  const staffGridSel = document.getElementById('menuGridStaffSel'); if(staffGridSel) staffGridSel.onchange = ()=>{ state.menuGridColsStaff = +staffGridSel.value; saveState(); renderView(); };
+  const custGridSel = document.getElementById('menuGridCustomerSel'); if(custGridSel) custGridSel.onchange = ()=>{ state.menuGridColsCustomer = +custGridSel.value; saveState(); toast('บันทึกแล้ว — มีผลกับหน้าลูกค้าสแกน QR ครั้งถัดไป'); };
 }
 function openUnpaidOrdersModal(){
   const orders = state.orders.filter(o=>o.status==='kitchen').sort((a,b)=>a.no-b.no);
@@ -1132,12 +1189,36 @@ function openCheckoutModal(){
     <div class="cash-quick" id="cashQuick">${[20,50,100,500,1000].map(v=>`<button type="button" data-cashadd="${v}">+${v}</button>`).join('')}<button type="button" id="cashExact">พอดี</button></div>
     <div id="changeBox" class="change-box"></div>
     <div id="qrPayBox"></div>
+    <div id="proofBox"></div>
     <button class="btn btn-ghost btn-small" id="printBillBtn" style="width:100%; margin-top:8px;">🖨 พิมพ์บิล/QR ชำระเงิน</button>
     <div class="modal-actions"><button class="btn btn-ghost" id="cancelPay">ยกเลิก</button><button class="btn btn-primary" id="confirmPay">ยืนยันรับเงิน</button></div>
   </div>`;
   document.body.appendChild(overlay);
   const payMethod = overlay.querySelector('#payMethod'), cashRow=overlay.querySelector('#cashRow'), cashQuick=overlay.querySelector('#cashQuick');
   const cashGiven = overlay.querySelector('#cashGiven'), changeBox=overlay.querySelector('#changeBox'), qrPayBox=overlay.querySelector('#qrPayBox');
+  const proofBox = overlay.querySelector('#proofBox'), confirmBtn = overlay.querySelector('#confirmPay');
+  let paymentProofImage = '';
+  function updateConfirmState(){
+    const needsProof = payMethod.value==='QR';
+    confirmBtn.disabled = needsProof && !paymentProofImage;
+    confirmBtn.style.opacity = confirmBtn.disabled ? '0.5' : '1';
+  }
+  function updateProofBox(){
+    if(payMethod.value!=='QR'){ proofBox.innerHTML=''; updateConfirmState(); return; }
+    proofBox.innerHTML = `
+      <div class="field"><label>แนบหลักฐานการชำระเงิน (ภาพสลิป) — จำเป็นสำหรับ QR Payment</label><input type="file" id="proofFile" accept="image/*"></div>
+      <div id="proofPreview" class="thumb-preview" style="width:100px; height:100px;">${paymentProofImage? `<img src="${paymentProofImage}" style="width:100%;height:100%;object-fit:cover;border-radius:8px; cursor:pointer;" id="proofPreviewImg">` : '🧾'}</div>`;
+    const fileInput = overlay.querySelector('#proofFile');
+    fileInput.onchange = async (e)=>{
+      const file = e.target.files[0]; if(!file) return;
+      if(file.size > 1200*1024){ toast('รูปใหญ่เกินไป กรุณาเลือกไฟล์ไม่เกิน ~1.2MB'); return; }
+      paymentProofImage = await readFileAsDataURL(file);
+      updateProofBox();
+    };
+    const previewImg = overlay.querySelector('#proofPreviewImg');
+    if(previewImg) previewImg.onclick = ()=>openImageLightbox(paymentProofImage, 'หลักฐานการชำระเงิน');
+    updateConfirmState();
+  }
   function updateQrBox(){
     if(payMethod.value!=='QR'){ qrPayBox.innerHTML=''; return; }
     const qr = promptpayQrImg(total, 170);
@@ -1158,12 +1239,16 @@ function openCheckoutModal(){
       changeBox.innerHTML = `<div class="change-label">เงินทอน</div><div class="change-amount mono">฿${fmt(change)}</div>`;
     }
   }
-  payMethod.onchange = ()=>{ updateChange(); updateQrBox(); }; cashGiven.oninput = updateChange; updateChange(); updateQrBox();
+  payMethod.onchange = ()=>{ updateChange(); updateQrBox(); updateProofBox(); }; cashGiven.oninput = updateChange; updateChange(); updateQrBox(); updateProofBox();
   overlay.querySelectorAll('[data-cashadd]').forEach(b=>b.onclick=()=>{ cashGiven.value = (+cashGiven.value||0)+(+b.dataset.cashadd); updateChange(); });
   overlay.querySelector('#cashExact').onclick = ()=>{ cashGiven.value = total; updateChange(); };
   overlay.querySelector('#printBillBtn').onclick = ()=>printBill(cart.items, total, payMethod.value);
   overlay.querySelector('#cancelPay').onclick = ()=>overlay.remove();
-  overlay.querySelector('#confirmPay').onclick = ()=>{ finalizeSale(payMethod.value, total); overlay.remove(); };
+  confirmBtn.onclick = ()=>{
+    if(payMethod.value==='QR' && !paymentProofImage){ toast('กรุณาแนบหลักฐานการชำระเงินก่อนปิดยอด'); return; }
+    finalizeSale(payMethod.value, total, paymentProofImage);
+    overlay.remove();
+  };
 }
 function printBill(items, total, payMethod){
   const s = state.shopSettings;
@@ -1191,16 +1276,17 @@ function printBill(items, total, payMethod){
   window.print();
 }
 
-function finalizeSale(payMethod, total){
+function finalizeSale(payMethod, total, paymentProofImage){
   let order = null;
   if(cart.orderId) order = state.orders.find(o=>o.id===cart.orderId && o.status!=='paid');
   else if(cart.tableId){ const t = state.tables.find(x=>x.id===cart.tableId); order = state.orders.find(o=>o.id===t.orderId && o.status!=='paid'); }
   const paidItems = cart.items.map(l=>({...l, kstatus:"เสิร์ฟแล้ว"}));
   if(order){
     order.status='paid'; order.payMethod=payMethod; order.paidAt=new Date().toISOString(); order.total=total; order.items = order.items.length? order.items.map(l=>({...l,kstatus:"เสิร์ฟแล้ว"})) : paidItems;
+    order.paymentProofImage = paymentProofImage || '';
   } else {
     order = { id:"o"+state.nextOrderNo, no:state.nextOrderNo, tableId:cart.tableId, channel:cart.channel, memberId:cart.memberId,
-      items:paidItems, discount:{...cart.discount}, status:'paid', source:'staff', payMethod, total, createdAt:new Date().toISOString(), paidAt:new Date().toISOString(), role:session.role };
+      items:paidItems, discount:{...cart.discount}, status:'paid', source:'staff', payMethod, total, paymentProofImage: paymentProofImage||'', createdAt:new Date().toISOString(), paidAt:new Date().toISOString(), role:session.role };
     state.nextOrderNo++; state.orders.push(order); deductStockForItems(order.items);
   }
   if(cart.tableId){ const t = state.tables.find(x=>x.id===cart.tableId); t.status='free'; t.orderId=null; t.pendingSelfOrder=null; }
@@ -2051,9 +2137,13 @@ function openBillDetailModal(orderId){
       </div>`;
     }).join('')}
     <div class="cf-total"><span>สุทธิ</span><span class="mono">฿${fmt(o.total||0)}</span></div>
+    ${o.paymentProofImage? `
+    <div class="section-title">หลักฐานการชำระเงิน</div>
+    <img src="${o.paymentProofImage}" id="billProofImg" style="width:100%; max-height:200px; object-fit:cover; border-radius:8px; border:1px solid var(--line); cursor:pointer;">` : ''}
     <div class="modal-actions"><button class="btn btn-primary" style="width:100%;" id="closeBillDetail">ปิด</button></div>
   </div>`;
   document.body.appendChild(overlay);
+  const proofImg = overlay.querySelector('#billProofImg'); if(proofImg) proofImg.onclick = ()=>openImageLightbox(o.paymentProofImage, `หลักฐานการชำระเงิน #${o.no}`);
   overlay.querySelector('#closeBillDetail').onclick = ()=>overlay.remove();
 }
 function bindAnalyticsEvents(){
@@ -2484,6 +2574,7 @@ function viewAdmin(){
     {key:'staff', label:'พนักงาน'},
     {key:'stations', label:'ครัว/สถานี'},
     {key:'suppliers', label:'ผู้จำหน่าย'},
+    {key:'theme', label:'ธีมสี'},
     {key:'sheets', label:'Google Sheet'},
     {key:'receipt', label:'ตั้งค่าใบเสร็จ'},
     {key:'printer', label:'เครื่องพิมพ์'},
@@ -2492,11 +2583,39 @@ function viewAdmin(){
   ];
   if(session.role==='owner') subs.push({key:'perms', label:'สิทธิ์การเข้าถึง'});
   subs.push({key:'audit', label:'ประวัติการทำงาน'});
-  const panels = { staff:adminStaffPanel, stations:adminStationsPanel, suppliers:adminSuppliersPanel, sheets:adminSheetsPanel, receipt:adminReceiptPanel, printer:adminPrinterPanel, expcat:adminExpenseCatPanel, mobileapp:adminMobileAppPanel, perms:adminPermsPanel, audit:adminAuditPanel };
+  const panels = { staff:adminStaffPanel, stations:adminStationsPanel, suppliers:adminSuppliersPanel, theme:adminThemePanel, sheets:adminSheetsPanel, receipt:adminReceiptPanel, printer:adminPrinterPanel, expcat:adminExpenseCatPanel, mobileapp:adminMobileAppPanel, perms:adminPermsPanel, audit:adminAuditPanel };
   if(!panels[adminSub] || (adminSub==='perms' && session.role!=='owner')) adminSub = 'staff';
   return `
   <div class="station-tabs">${subs.map(s=>`<button class="station-tab ${s.key===adminSub?'active':''}" data-adminsub="${s.key}">${s.label}</button>`).join('')}</div>
   ${panels[adminSub]()}`;
+}
+function adminThemePanel(){
+  return `<div class="panel">
+    <div class="section-title">ธีมสีของแอป</div>
+    <p class="hint">เลือกโทนสีที่ใช้ทั้งแอป มีผลกับทุกคนที่เข้าใช้งาน (รวมหน้าลูกค้าสแกน QR สั่งอาหารด้วย)</p>
+    <div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:10px;">
+      ${Object.entries(THEME_PRESETS).map(([key,t])=>`
+        <button data-picktheme="${key}" style="border:2px solid ${state.themeName===key?'var(--broth)':'var(--line)'}; border-radius:12px; padding:10px; width:120px; background:${t.paper}; text-align:center; cursor:pointer;">
+          <div style="display:flex; gap:4px; justify-content:center; margin-bottom:8px;">
+            <span style="width:20px; height:20px; border-radius:50%; background:${t.broth}; display:inline-block;"></span>
+            <span style="width:20px; height:20px; border-radius:50%; background:${t.brothDeep}; display:inline-block;"></span>
+            <span style="width:20px; height:20px; border-radius:50%; background:${t.gold}; display:inline-block;"></span>
+          </div>
+          <div style="font-size:12px; font-weight:600; color:${t.ink};">${t.name}</div>
+          ${state.themeName===key? `<div style="font-size:10.5px; color:var(--broth); font-weight:700; margin-top:4px;">✓ ใช้อยู่</div>`:''}
+        </button>
+      `).join('')}
+    </div>
+  </div>`;
+}
+
+function bindAdminThemeEvents(){
+  document.querySelectorAll('[data-picktheme]').forEach(b=>b.onclick=()=>{
+    state.themeName = b.dataset.picktheme;
+    applyTheme(state.themeName);
+    addAudit(`เปลี่ยนธีมสีเป็น ${THEME_PRESETS[state.themeName].name}`);
+    saveState(); renderView();
+  });
 }
 
 function adminPermsPanel(){
@@ -3170,6 +3289,7 @@ function bindAdminEvents(){
   if(adminSub==='expcat') bindAdminExpenseCatEvents();
   if(adminSub==='mobileapp') bindAdminMobileAppEvents();
   if(adminSub==='stations') bindAdminStationsEvents();
+  if(adminSub==='theme') bindAdminThemeEvents();
   if(adminSub==='suppliers') bindAdminSuppliersEvents();
   if(adminSub==='perms' && session.role==='owner') bindAdminPermsEvents();
 }
@@ -3215,11 +3335,14 @@ function renderCustomerOrderPage(tableId){
     <div style="background:var(--broth-deep); color:#fff; padding:18px; text-align:center; position:sticky; top:0; z-index:5;">
       <div style="font-weight:700; font-size:17px;">${state.shopSettings.name||'ร้านค้า'}</div>
       <div style="font-size:13px; opacity:.85; margin-top:2px;">สั่งอาหารที่ ${t.name}</div>
-      ${t.pendingSelfOrder? `<div style="margin-top:8px; background:rgba(255,255,255,0.15); border-radius:8px; padding:6px 10px; font-size:12px;">คุณมีออเดอร์ที่ส่งไปแล้ว กำลังรอพนักงานยืนยัน</div>`:''}
+      ${t.pendingSelfOrder? `<div style="margin-top:8px; background:rgba(255,255,255,0.15); border-radius:8px; padding:8px 10px; font-size:12px; text-align:left;">
+        <div style="font-weight:700; margin-bottom:4px;">คุณมีออเดอร์ที่ส่งไปแล้ว กำลังรอพนักงานยืนยัน:</div>
+        ${t.pendingSelfOrder.items.map(l=>{ const p=state.products.find(x=>x.id===l.pid); return `<div>• ${p?p.name:'-'} × ${l.qty}</div>`; }).join('')}
+      </div>`:''}
     </div>
     <div class="cat-row" style="padding:12px 14px 0;">${cats.map(c=>`<button class="cat-chip ${c===customerCatFilter?'active':''}" data-custcat="${c}">${c}</button>`).join('')}</div>
     <div style="flex:1; padding:10px 14px 150px;">
-      <div class="prod-grid">${prods.map(p=>`
+      <div class="prod-grid" ${(state.menuGridColsCustomer||0)>0?`style="grid-template-columns:repeat(${state.menuGridColsCustomer},1fr);"`:''}>${prods.map(p=>`
         <button class="prod-tile" data-custadd="${p.id}">
           <div class="prod-thumb" ${prodThumb(p)}>${p.image?'':'🍜'}</div>
           <div class="prod-body"><div class="pname">${p.name}</div><div class="pprice mono">฿${fmt(p.price)}</div></div>
@@ -3257,15 +3380,24 @@ function bindCustomerPageEvents(t){
     submitBtn.disabled = true; submitBtn.textContent = 'กำลังส่ง...';
     const table = state.tables.find(x=>x.id===t.id);
     const existing = table.pendingSelfOrder;
-    table.pendingSelfOrder = { items: existing? existing.items.concat(JSON.parse(JSON.stringify(customerCart))) : JSON.parse(JSON.stringify(customerCart)), createdAt:new Date().toISOString() };
+    const justOrdered = JSON.parse(JSON.stringify(customerCart));
+    table.pendingSelfOrder = { items: existing? existing.items.concat(justOrdered) : justOrdered, createdAt:new Date().toISOString() };
     await saveState();
     customerCart = [];
+    const orderedTotal = justOrdered.reduce((s,l)=>s+cartLineTotal(l),0);
     const app = document.getElementById('app');
     app.innerHTML = `<div class="login-wrap"><div class="login-card">
       <div class="login-mark">✓</div>
       <h2>ส่งคำสั่งซื้อแล้ว</h2>
       <p class="lede" style="color:var(--ink-soft); font-size:13px;">รอพนักงานยืนยันออเดอร์ที่ ${table.name} สักครู่</p>
-      <button class="btn btn-primary" style="width:100%; margin-top:10px;" onclick="location.reload()">สั่งเพิ่ม</button>
+      <div style="text-align:left; margin-top:14px; border-top:1px dashed var(--line); padding-top:10px;">
+        ${justOrdered.map(l=>{
+          const p = state.products.find(x=>x.id===l.pid);
+          return `<div style="display:flex; justify-content:space-between; font-size:13.5px; padding:4px 0;"><span>${p?p.name:'-'} × ${l.qty}</span><span class="mono">฿${fmt(cartLineTotal(l))}</span></div>`;
+        }).join('')}
+        <div style="display:flex; justify-content:space-between; font-weight:700; border-top:1px dashed var(--line); margin-top:6px; padding-top:6px;"><span>รวม</span><span class="mono">฿${fmt(orderedTotal)}</span></div>
+      </div>
+      <button class="btn btn-primary" style="width:100%; margin-top:14px;" onclick="location.reload()">สั่งเพิ่ม</button>
     </div></div>`;
   };
 }
@@ -3273,8 +3405,9 @@ function bindCustomerPageEvents(t){
 /* ============================= INIT ============================= */
 (async function init(){
   await loadSharedState();
+  applyTheme(state.themeName);
   const qrTable = new URLSearchParams(window.location.search).get('table');
-  if(qrTable){ renderCustomerOrderPage(qrTable); if(STORAGE_MODE==='claude'||STORAGE_MODE==='sheets') setInterval(async ()=>{ try{ const res=await storageGet('pos-shared-state', true); if(res&&res.value){ state=JSON.parse(res.value); migrateState(); } }catch(e){} }, STORAGE_MODE==='sheets'?9000:8000); return; }
+  if(qrTable){ renderCustomerOrderPage(qrTable); if(STORAGE_MODE==='claude'||STORAGE_MODE==='sheets') setInterval(async ()=>{ try{ const res=await storageGet('pos-shared-state', true); if(res&&res.value){ state=JSON.parse(res.value); migrateState(); applyTheme(state.themeName); } }catch(e){} }, STORAGE_MODE==='sheets'?9000:8000); return; }
   await tryAutoLogin();
   render();
   if(session){ startPolling(); startAutoSyncTimer(); }
