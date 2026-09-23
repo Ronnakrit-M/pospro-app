@@ -1019,8 +1019,10 @@ function viewPOS(){
         <div class="cf-row" style="align-items:center;"><span>โค้ดส่วนลด</span>
           <span style="display:flex; gap:4px;">
             ${cart.discount.code? `<span class="chip-x">${cart.discount.code}<button id="clearPromoCode">×</button></span>` : `
-            <input id="promoCodeInput" class="mini" style="width:100px; text-transform:uppercase;" placeholder="เช่น SAVE10">
-            <button class="btn btn-secondary btn-small" id="applyPromoCode">ใช้โค้ด</button>`}
+            <select id="promoCodeSelect" class="mini" style="min-width:150px;">
+              <option value="">— เลือกโค้ดส่วนลด —</option>
+              ${state.promotions.map(p=>`<option value="${p.code}">${p.code} (${p.type==='percent'?p.value+'%':'฿'+fmt(p.value)}) — ${p.name}</option>`).join('')}
+            </select>`}
           </span></div>
         <div class="cf-row" style="align-items:center;"><span>ส่วนลด</span>
           <span style="display:flex; gap:4px;">
@@ -1045,9 +1047,9 @@ function bindPOSEvents(){
   document.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{ cart.items.splice(+b.dataset.remove,1); renderView(); });
   const discType = document.getElementById('discType'); if(discType) discType.onchange = e=>{ cart.discount.type=e.target.value; cart.discount.code=null; if(e.target.value==='none') cart.discount.value=0; renderView(); };
   const discVal = document.getElementById('discVal'); if(discVal) discVal.oninput = e=>{ cart.discount.value = +e.target.value||0; cart.discount.code=null; renderView(); };
-  const applyPromoBtn = document.getElementById('applyPromoCode'); if(applyPromoBtn) applyPromoBtn.onclick = ()=>{
-    const raw = document.getElementById('promoCodeInput').value.trim().toUpperCase();
-    if(!raw){ toast('กรุณาใส่โค้ดส่วนลด'); return; }
+  const promoSelect = document.getElementById('promoCodeSelect'); if(promoSelect) promoSelect.onchange = ()=>{
+    const raw = promoSelect.value;
+    if(!raw) return;
     const promo = state.promotions.find(p=>p.code===raw);
     if(!promo){ toast('ไม่พบโค้ดนี้'); return; }
     cart.discount = { type:promo.type, value:promo.value, code:promo.code };
@@ -1135,6 +1137,33 @@ function openOptionsModal(pid){
     const existing = cart.items.find(l=>l.pid===pid && JSON.stringify(l.opts)===JSON.stringify(opts) && l.note===note);
     if(existing) existing.qty += 1; else cart.items.push({pid, qty:1, opts, note});
     overlay.remove(); renderView();
+  };
+}
+
+function openCustomerOptionsModal(pid, tableId){
+  const p = state.products.find(x=>x.id===pid);
+  const co = getCategoryOptions(p.category);
+  const overlay = document.createElement('div'); overlay.className='overlay';
+  overlay.innerHTML = `<div class="modal">
+    <h3>${p.name} <span class="mono" style="color:var(--broth); font-size:14px;">฿${fmt(p.price)}</span></h3>
+    ${p.image? `<div class="thumb-preview" style="width:100%; height:160px; background-image:url('${p.image.replace(/'/g,"%27")}')"></div>`:''}
+    ${co.useNoodle?`<div class="opt-group"><div class="og-title">เลือกเส้น</div>${state.productOptions.noodle.map(n=>`<label class="opt-choice"><input type="radio" name="cnoodle" value="${n}">${n}</label>`).join('')}</div>`:''}
+    ${co.useStyle?`<div class="opt-group"><div class="og-title">ระดับ</div>${state.productOptions.style.map(n=>`<label class="opt-choice"><input type="radio" name="cstyle" value="${n}">${n}</label>`).join('')}</div>`:''}
+    ${co.extras.length?`<div class="opt-group"><div class="og-title">เพิ่มเติม</div>${co.extras.map(n=>`<label class="opt-choice"><input type="checkbox" name="cextra" value="${n}">${n}</label>`).join('')}</div>`:''}
+    <div class="field"><label>หมายเหตุ</label><input type="text" id="coptNote" placeholder="เช่น ไม่เผ็ด"></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="ccancelOpt">ยกเลิก</button><button class="btn btn-primary" id="cconfirmOpt">เพิ่มลงตะกร้า</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#ccancelOpt').onclick = ()=>overlay.remove();
+  overlay.querySelector('#cconfirmOpt').onclick = ()=>{
+    const noodle = overlay.querySelector('input[name=cnoodle]:checked');
+    const style = overlay.querySelector('input[name=cstyle]:checked');
+    const extras = [...overlay.querySelectorAll('input[name=cextra]:checked')].map(x=>x.value);
+    const note = overlay.querySelector('#coptNote').value.trim();
+    const opts = []; if(noodle) opts.push(noodle.value); if(style) opts.push(style.value); opts.push(...extras);
+    const existing = customerCart.find(l=>l.pid===pid && JSON.stringify(l.opts)===JSON.stringify(opts) && l.note===note);
+    if(existing) existing.qty += 1; else customerCart.push({pid, qty:1, opts, note});
+    overlay.remove(); renderCustomerOrderPage(tableId);
   };
 }
 
@@ -1240,14 +1269,17 @@ function openCheckoutModal(){
   const proofBox = overlay.querySelector('#proofBox'), confirmBtn = overlay.querySelector('#confirmPay');
   let paymentProofImage = '';
   function updateConfirmState(){
-    const needsProof = payMethod.value==='QR';
-    confirmBtn.disabled = needsProof && !paymentProofImage;
+    confirmBtn.disabled = !paymentProofImage;
     confirmBtn.style.opacity = confirmBtn.disabled ? '0.5' : '1';
   }
+  function proofLabel(){
+    if(payMethod.value==='QR') return 'แนบหลักฐานการชำระเงิน (ภาพสลิปโอนเงิน) — จำเป็น';
+    if(payMethod.value==='บัตร') return 'แนบหลักฐานการชำระเงิน (ภาพใบเสร็จจากเครื่องรูดบัตร) — จำเป็น';
+    return 'แนบหลักฐานการชำระเงิน (ภาพเงินสดที่รับ) — จำเป็น';
+  }
   function updateProofBox(){
-    if(payMethod.value!=='QR'){ proofBox.innerHTML=''; updateConfirmState(); return; }
     proofBox.innerHTML = `
-      <div class="field"><label>แนบหลักฐานการชำระเงิน (ภาพสลิป) — จำเป็นสำหรับ QR Payment</label><input type="file" id="proofFile" accept="image/*"></div>
+      <div class="field"><label>${proofLabel()}</label><input type="file" id="proofFile" accept="image/*"></div>
       <div id="proofPreview" class="thumb-preview" style="width:100px; height:100px;">${paymentProofImage? `<img src="${paymentProofImage}" style="width:100%;height:100%;object-fit:cover;border-radius:8px; cursor:pointer;" id="proofPreviewImg">` : '🧾'}</div>`;
     const fileInput = overlay.querySelector('#proofFile');
     fileInput.onchange = async (e)=>{
@@ -1286,9 +1318,11 @@ function openCheckoutModal(){
   overlay.querySelector('#printBillBtn').onclick = ()=>printBill(cart.items, total, payMethod.value);
   overlay.querySelector('#cancelPay').onclick = ()=>overlay.remove();
   confirmBtn.onclick = ()=>{
-    if(payMethod.value==='QR' && !paymentProofImage){ toast('กรุณาแนบหลักฐานการชำระเงินก่อนปิดยอด'); return; }
+    if(!paymentProofImage){ toast('กรุณาแนบหลักฐานการชำระเงินก่อนปิดยอด'); return; }
+    const itemsSnapshot = JSON.parse(JSON.stringify(cart.items));
     finalizeSale(payMethod.value, total, paymentProofImage);
     overlay.remove();
+    printBill(itemsSnapshot, total, payMethod.value);
   };
 }
 function printBill(items, total, payMethod){
@@ -1542,15 +1576,17 @@ function viewKitchen(){
 
   const activeOrders = state.orders.filter(o=>o.status==='kitchen').sort((a,b)=>a.no-b.no);
   const tickets = activeOrders.map(o=>{
-    const lines = o.items.map((l,idx)=>({...l, idx})).filter(l=>{
-      const p = state.products.find(x=>x.id===l.pid); return p && p.station===kitchenStation && l.kstatus!=='เสิร์ฟแล้ว';
+    const stationLines = o.items.map((l,idx)=>({...l, idx})).filter(l=>{
+      const p = state.products.find(x=>x.id===l.pid); return p && p.station===kitchenStation;
     });
-    return {order:o, lines};
+    const lines = stationLines.filter(l=>l.kstatus!=='เสิร์ฟแล้ว');
+    const doneCount = stationLines.length - lines.length; // items for this station already completed — used to detect skipped-over orders
+    return {order:o, lines, doneCount};
   }).filter(t=>t.lines.length>0);
 
-  tickets.forEach(t=>{ t.progress = Math.min(...t.lines.map(l=>KSTEPS.indexOf(l.kstatus))); });
   tickets.forEach(t=>{
-    t.skipped = tickets.some(t2=> t2.order.id!==t.order.id && new Date(t2.order.createdAt) > new Date(t.order.createdAt) && t2.progress > t.progress);
+    // An order counts as "skipped" if a NEWER order already has progress on this station while this OLDER one has none at all yet.
+    t.skipped = tickets.some(t2=> t2.order.id!==t.order.id && t2.order.no > t.order.no && t2.doneCount > 0 && t.doneCount===0);
     t.elapsedMin = Math.max(0, Math.floor((Date.now() - new Date(t.order.createdAt).getTime())/60000));
   });
 
@@ -2623,7 +2659,6 @@ function viewAdmin(){
     {key:'suppliers', label:'ผู้จำหน่าย'},
     {key:'theme', label:'ธีมสี'},
     {key:'supabase', label:'Supabase'},
-    {key:'sheets', label:'Google Sheet'},
     {key:'receipt', label:'ตั้งค่าใบเสร็จ'},
     {key:'printer', label:'เครื่องพิมพ์'},
     {key:'expcat', label:'หมวดหมู่รายจ่าย'},
@@ -2632,7 +2667,7 @@ function viewAdmin(){
   if(session.role==='owner') subs.push({key:'perms', label:'สิทธิ์การเข้าถึง'});
   subs.push({key:'audit', label:'ประวัติการทำงาน'});
   const panels = { staff:adminStaffPanel, stations:adminStationsPanel, suppliers:adminSuppliersPanel, theme:adminThemePanel, supabase:adminSupabasePanel, sheets:adminSheetsPanel, receipt:adminReceiptPanel, printer:adminPrinterPanel, expcat:adminExpenseCatPanel, mobileapp:adminMobileAppPanel, perms:adminPermsPanel, audit:adminAuditPanel };
-  if(!panels[adminSub] || (adminSub==='perms' && session.role!=='owner')) adminSub = 'staff';
+  if(!panels[adminSub] || adminSub==='sheets' || (adminSub==='perms' && session.role!=='owner')) adminSub = 'staff';
   return `
   <div class="station-tabs">${subs.map(s=>`<button class="station-tab ${s.key===adminSub?'active':''}" data-adminsub="${s.key}">${s.label}</button>`).join('')}</div>
   ${panels[adminSub]()}`;
@@ -3282,12 +3317,21 @@ function openSupplierModal(existing, onSaved){
   };
 }
 const SUPABASE_SQL_SETUP = `-- รันในหน้า Supabase → SQL Editor → New query
+-- ปลอดภัยที่จะรันซ้ำได้เสมอ แก้ปัญหา "row-level security policy" ได้ด้วย
 create table if not exists pos_state (
   id text primary key,
   data jsonb not null,
   updated_at timestamptz not null default now()
 );
-alter table pos_state disable row level security;`;
+
+alter table pos_state enable row level security;
+
+drop policy if exists "Allow anon full access" on pos_state;
+create policy "Allow anon full access" on pos_state
+  for all
+  to anon
+  using (true)
+  with check (true);`;
 
 function adminSupabasePanel(){
   const usingSupabaseHere = STORAGE_MODE==='supabase';
@@ -3321,7 +3365,7 @@ function adminSupabasePanel(){
         <input id="shareSupabaseLink" readonly value="${shareLink}" style="font-size:11.5px;"></div>
         <button class="btn btn-ghost btn-small" id="copySupabaseLink">คัดลอกลิงก์</button>` : ''}
     </div>
-    <div class="notice" style="margin-top:14px;">ความปลอดภัย: โค้ด SQL ด้านบนปิด Row Level Security ไว้เพื่อให้ทุกอุปกรณ์ที่มีลิงก์อ่าน/เขียนข้อมูลร้านได้โดยไม่ต้องล็อกอิน Supabase — เหมาะกับการใช้งานภายในร้าน แต่หมายความว่าใครก็ตามที่ได้ลิงก์นี้ไปจะเข้าถึงข้อมูลได้ทั้งหมด อย่าเผยแพร่ลิงก์นี้แบบสาธารณะ (คนละส่วนกับ URL/QR สั่งอาหารของลูกค้า ซึ่งไม่มีค่า sbKey ติดไปด้วย)</div>
+    <div class="notice" style="margin-top:14px;">ความปลอดภัย: โค้ด SQL ด้านบนเปิด Row Level Security ไว้ แต่เพิ่ม policy อนุญาตให้ทุกอุปกรณ์ที่มีลิงก์อ่าน/เขียนข้อมูลร้านได้โดยไม่ต้องล็อกอิน Supabase — เหมาะกับการใช้งานภายในร้าน แต่หมายความว่าใครก็ตามที่ได้ลิงก์นี้ไปจะเข้าถึงข้อมูลได้ทั้งหมด อย่าเผยแพร่ลิงก์นี้แบบสาธารณะ (คนละส่วนกับ URL/QR สั่งอาหารของลูกค้า ซึ่งไม่มีค่า sbKey ติดไปด้วย)</div>
   </div>`;
 }
 
@@ -3515,9 +3559,15 @@ function bindCustomerPageEvents(t){
   document.querySelectorAll('[data-custcat]').forEach(b=>b.onclick=()=>{ customerCatFilter=b.dataset.custcat; renderCustomerOrderPage(t.id); });
   document.querySelectorAll('[data-custadd]').forEach(b=>b.onclick=()=>{
     const pid = b.dataset.custadd;
-    const ex = customerCart.find(l=>l.pid===pid && (!l.opts||l.opts.length===0));
-    if(ex) ex.qty+=1; else customerCart.push({pid, qty:1, opts:[], note:""});
-    renderCustomerOrderPage(t.id);
+    const p = state.products.find(x=>x.id===pid);
+    const co = getCategoryOptions(p.category);
+    if(!co.useNoodle && !co.useStyle && co.extras.length===0){
+      const ex = customerCart.find(l=>l.pid===pid && (!l.opts||l.opts.length===0) && !l.note);
+      if(ex) ex.qty+=1; else customerCart.push({pid, qty:1, opts:[], note:""});
+      renderCustomerOrderPage(t.id);
+    } else {
+      openCustomerOptionsModal(pid, t.id);
+    }
   });
   document.querySelectorAll('[data-custqty]').forEach(b=>b.onclick=()=>{
     const i=+b.dataset.idx; customerCart[i].qty += (+b.dataset.custqty); if(customerCart[i].qty<=0) customerCart.splice(i,1);
